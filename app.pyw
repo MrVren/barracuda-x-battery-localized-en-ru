@@ -32,8 +32,30 @@ RUN_NAME = 'BarracudaBattery'
 SHOW_EVENT = r'Local\BarracudaBattery.Show'        # set: the tray process opens the window
 REFRESH_EVENT = r'Local\BarracudaBattery.Refresh'  # set: the tray process reads the headset now
 WINDOW_EVENT = r'Local\BarracudaBattery.Window'    # set: the window process comes to the front
-NO_ANSWER = 'Kulaklık kapalı, kapsama dışında veya Bluetooth modunda'
 SETTINGS = {'eq_preset': hs.EQ_PRESET, 'custom_eq': hs.CUSTOM_EQ, 'dnd': hs.DND, 'standby': hs.STANDBY}
+# Tray and error text. The window translates the same codes in ui/i18n.js; keep the wording in step.
+_STRINGS = {
+    'en': {
+        'menu_show': 'Show', 'menu_read': 'Read now', 'menu_quit': 'Quit',
+        'tip': 'Barracuda X: {pct}%{extra}', 'tip_charge': ' · charging', 'battery': 'Battery at {pct}%',
+        'no_answer': 'Headset is off, out of range, or in Bluetooth mode',
+        'no_dongle': 'USB receiver is not plugged in',
+        'unsupported': 'This receiver is not supported: {name} (USB 1532:{pid})',
+        'os_error': 'Error: {err}', 'error': 'Error: {kind}: {err}',
+        'diag_fail': 'Diagnostics failed: {kind}: {err}',
+        'bad_setting': 'Invalid setting: {err}', 'rejected': 'The headset did not accept the setting',
+    },
+    'ru': {
+        'menu_show': 'Открыть', 'menu_read': 'Считать сейчас', 'menu_quit': 'Выход',
+        'tip': 'Barracuda X: {pct}%{extra}', 'tip_charge': ' · заряжается', 'battery': 'Заряд {pct}%',
+        'no_answer': 'Гарнитура выключена, вне зоны или в режиме Bluetooth',
+        'no_dongle': 'USB-приёмник не подключён',
+        'unsupported': 'Этот приёмник не поддерживается: {name} (USB 1532:{pid})',
+        'os_error': 'Ошибка: {err}', 'error': 'Ошибка: {kind}: {err}',
+        'diag_fail': 'Диагностика не удалась: {kind}: {err}',
+        'bad_setting': 'Неверная настройка: {err}', 'rejected': 'Гарнитура не приняла настройку',
+    },
+}
 GREEN, BLUE, RED = '#44d62c', '#1fd8f0', '#ff3c3c'  # tray icon, as in the page
 
 _k32 = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -101,14 +123,53 @@ def load_prefs():
         return {}
 
 
-def dongle_error(e):
+def current_lang():
+    code = str(load_prefs().get('lang') or 'en')
+    return code if code in _STRINGS else 'en'
+
+
+def L(key, **kw):
+    text = _STRINGS[current_lang()].get(key) or _STRINGS['en'][key]
+    return text.format(**kw) if kw else text
+
+
+def dongle_code(e):
+    """A code the window translates. Stored as-is so a language change does not bake in the old wording."""
     text = str(e)
     if text == 'dongle not found':
-        return 'USB alıcı takılı değil'
+        return 'no_dongle'
     if text.startswith('unsupported dongle'):
         pid = int(text.split()[-1], 16)
-        return f'Bu alıcı desteklenmiyor: {hs.OTHER_DONGLES[pid]} (USB 1532:{pid:04X})'
-    return f'Hata: {type(e).__name__}: {e}' if not isinstance(e, OSError) else f'Hata: {e}'
+        return f'unsupported\t{hs.OTHER_DONGLES[pid]}\t{pid:04X}'
+    if isinstance(e, OSError):
+        return f'os\t{e}'
+    return f'err\t{type(e).__name__}\t{e}'
+
+
+def human(code):
+    """Tray tooltip text for a dongle_code(), or the no-answer line when code is empty."""
+    if not code or code == 'no_answer':
+        return L('no_answer')
+    kind, _, rest = str(code).partition('\t')
+    if kind == 'no_dongle':
+        return L('no_dongle')
+    if kind == 'unsupported':
+        name, _, pid = rest.partition('\t')
+        return L('unsupported', name=name, pid=pid)
+    if kind == 'os':
+        return L('os_error', err=rest)
+    if kind == 'err':
+        name, _, err = rest.partition('\t')
+        return L('error', kind=name, err=err)
+    if kind == 'rejected':
+        return L('rejected')
+    if kind == 'bad':
+        return L('bad_setting', err=rest)
+    return str(code)
+
+
+assert human('') == L('no_answer') and human('no_dongle') == L('no_dongle')
+assert '1532:ABCD' in human('unsupported\tName\tABCD')
 
 
 # ---- tray process ----
@@ -162,9 +223,9 @@ class Tray:
         self.window = None  # the window process
         self.warned = False
         self.icon = pystray.Icon('barracuda', tray_image('..', 'gray'), 'Barracuda X', menu=pystray.Menu(
-            pystray.MenuItem('Göster', lambda: self.open_window(), default=True),  # default = left click
-            pystray.MenuItem('Şimdi oku', lambda: threading.Thread(target=self.read, daemon=True).start()),
-            pystray.MenuItem('Çıkış', lambda: self.quit()),
+            pystray.MenuItem(lambda _: L('menu_show'), lambda: self.open_window(), default=True),  # default = left click
+            pystray.MenuItem(lambda _: L('menu_read'), lambda: threading.Thread(target=self.read, daemon=True).start()),
+            pystray.MenuItem(lambda _: L('menu_quit'), lambda: self.quit()),
         ))
 
     def run(self, open_window):
@@ -214,22 +275,22 @@ class Tray:
                 state, message = ('ok' if res else 'no_answer'), ''
             except Exception as e:  # anything: this runs on the poll thread, which must survive to try again
                 res = None
-                state, message = ('no_dongle' if str(e) == 'dongle not found' else 'error'), dongle_error(e)
+                state, message = ('no_dongle' if str(e) == 'dongle not found' else 'error'), dongle_code(e)
             if res:
                 self.history.add(*res)
             self.history.set_status(state, message)
-            self.show(res, message or NO_ANSWER)
+            self.show(res, message)
 
     def show(self, res, problem):
         if res is None:
-            self.icon.icon, self.icon.title = tray_image('--', 'gray'), f'Barracuda X: {problem}'
+            self.icon.icon, self.icon.title = tray_image('--', 'gray'), f'Barracuda X: {human(problem)}'
             return
         pct, charging = res
         color = BLUE if charging else RED if pct <= LOW_PERCENT else GREEN
         self.icon.icon = tray_image(str(pct), color, charging)
-        self.icon.title = f'Barracuda X: %{pct}{" · şarj oluyor" if charging else ""}'
+        self.icon.title = L('tip', pct=pct, extra=L('tip_charge') if charging else '')
         if pct <= LOW_PERCENT and not charging and not self.warned:
-            self.icon.notify(f'Pil seviyesi %{pct}', 'Barracuda X')
+            self.icon.notify(L('battery', pct=pct), 'Barracuda X')
             self.warned = True
         elif pct > LOW_PERCENT or charging:
             self.warned = False
@@ -361,11 +422,11 @@ class Api:
         try:
             s = hs.read_settings()
         except Exception as e:
-            return {'error': dongle_error(e)}
+            return {'error': dongle_code(e)}
         if s is None:
-            return {'error': NO_ANSWER}
+            return {'error': 'no_answer'}
         info = hs.find_dongle()
-        return {'version': s['version'], 'gaming': s[hs.GAMING], 'receiver': info and hs.DONGLES[info['product_id']],
+        return {'version': s['version'], 'gaming': s[hs.GAMING], 'receiver_pid': info and info['product_id'],
                 **{name: s[cmd] for name, cmd in SETTINGS.items()}}
 
     def diagnose(self):
@@ -373,7 +434,7 @@ class Api:
         try:
             text = hs.diagnose()
         except Exception as e:
-            text = f'Tanılama yapılamadı: {type(e).__name__}: {e}\n'
+            text = f'{L("diag_fail", kind=type(e).__name__, err=e)}\n'
         path = os.path.join(os.path.dirname(history.default_path()), 'tanilama.txt')
         with open(path, 'w', encoding='utf-8') as f:
             f.write(text)
@@ -385,13 +446,20 @@ class Api:
         try:
             ok = hs.write_settings([(SETTINGS[name], [int(v) for v in values]) for name, values in changes])
         except OSError as e:
-            return {'ok': False, 'error': dongle_error(e)}
+            return {'ok': False, 'error': dongle_code(e)}
         except (KeyError, ValueError) as e:
-            return {'ok': False, 'error': f'Geçersiz ayar: {e}'}
-        return {'ok': bool(ok), 'error': None if ok else 'Kulaklık ayarı kabul etmedi' if ok is False else NO_ANSWER}
+            return {'ok': False, 'error': f'bad\t{e}'}
+        return {'ok': bool(ok), 'error': None if ok else 'rejected' if ok is False else 'no_answer'}
 
     def prefs(self):
-        return {'startup': startup_enabled(), 'on_top': is_topmost(self._window)}
+        return {'startup': startup_enabled(), 'on_top': is_topmost(self._window), 'lang': current_lang()}
+
+    def set_lang(self, code):
+        code = code if code in _STRINGS else 'en'
+        with open(prefs_path(), 'w', encoding='utf-8') as f:
+            json.dump({**load_prefs(), 'lang': code}, f)
+        signal(REFRESH_EVENT)  # tray rewrites its tooltip in the new language
+        return code
 
     def set_startup(self, on):
         set_startup(bool(on))

@@ -18,7 +18,7 @@ from contextlib import contextmanager
 import hid
 
 VID = 0x1532
-DONGLES = {0x0550: 'Barracuda X (2022), YS-Tech alıcı', 0x0552: 'Barracuda X (2022), Macronix alıcı'}
+DONGLES = {0x0550: 'Barracuda X (2022), YS-Tech receiver', 0x0552: 'Barracuda X (2022), Macronix receiver'}
 # Other Barracuda X receivers, with other protocols; recognized only to say they aren't supported.
 OTHER_DONGLES = {0x0536: 'Barracuda X (2021)', 0x0574: 'Barracuda X Chroma'}
 YS_TECH, MACRONIX = 0x02, 0x01  # report id of each bridge's vendor collection
@@ -34,7 +34,7 @@ CUSTOM_EQ = 0x15    # ten bands, 0..10, 5 = flat
 DND = 0x27          # 00 off / 01 on
 STANDBY = 0x2C      # minutes idle before power-off, STANDBY_MINUTES
 
-EQ_PRESETS = {0x00: 'Varsayılan', 0x07: 'Oyun', 0x08: 'Müzik', 0x09: 'Film', 0xFF: 'Özel'}
+EQ_PRESETS = {0x00: 'Default', 0x07: 'Game', 0x08: 'Music', 0x09: 'Movie', 0xFF: 'Custom'}
 EQ_BANDS = ('31', '63', '125', '250', '500', '1k', '2k', '4k', '8k', '16k')
 STANDBY_MINUTES = (0, 5, 15, 30, 45, 60)  # 0 = never
 # Allowed values per setting, checked before anything is sent to the headset.
@@ -321,8 +321,8 @@ def diagnose():
     """Text report for troubleshooting on someone else's PC: the Razer HID collections Windows lists, then the raw
     traffic of one battery read and one settings read."""
     global _trace_log
-    lines = [f'Barracuda X tanılama  {time.strftime("%Y-%m-%d %H:%M:%S")}  {platform.platform()}', '',
-             'Razer HID arayüzleri:']
+    lines = [f'Barracuda X diagnostics  {time.strftime("%Y-%m-%d %H:%M:%S")}  {platform.platform()}', '',
+             'Razer HID interfaces:']
     for d in hid.enumerate(VID):
         lines.append(f"  {d['product_id']:04x}  if {d['interface_number']}  page {d['usage_page']:04x}  "
                      f"usage {d['usage']:04x}  {d['product_string']}  {d['path']!r}")
